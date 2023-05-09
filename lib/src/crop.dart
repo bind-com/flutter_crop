@@ -97,6 +97,7 @@ class _CropState extends State<Crop> with TickerProviderStateMixin {
   final _key = GlobalKey();
   final _parent = GlobalKey();
   final _repaintBoundaryKey = GlobalKey();
+  final _childKey = GlobalKey();
 
   double _previousScale = 1;
   Offset _previousOffset = Offset.zero;
@@ -114,8 +115,7 @@ class _CropState extends State<Crop> with TickerProviderStateMixin {
   late CurvedAnimation _animation;
 
   Future<ui.Image> _crop(double pixelRatio) {
-    final rrb = _repaintBoundaryKey.currentContext?.findRenderObject()
-        as RenderRepaintBoundary;
+    final rrb = _repaintBoundaryKey.currentContext?.findRenderObject() as RenderRepaintBoundary;
 
     return rrb.toImage(pixelRatio: pixelRatio);
   }
@@ -142,66 +142,44 @@ class _CropState extends State<Crop> with TickerProviderStateMixin {
   }
 
   void _reCenterImage([bool animate = true]) {
-    //final totalSize = _parent.currentContext.size;
-
     final sz = _key.currentContext!.size!;
     final s = widget.controller._scale * widget.controller._getMinScale();
-    final w = sz.width;
-    final h = sz.height;
-    final offset = _toVector2(widget.controller._offset);
-    final canvas = Rectangle.fromLTWH(0, 0, w, h);
-    final obb = Obb2(
-      center: offset + canvas.center,
-      width: w * s,
-      height: h * s,
-      rotation: widget.controller._rotation,
+    final childWidgetSize = (_childKey.currentContext?.findRenderObject() as RenderBox).size;
+
+    double w, h;
+    final ratio = childWidgetSize.aspectRatio / sz.aspectRatio;
+    if (childWidgetSize.aspectRatio < 1.0) {
+      // Vertical image. Height needs to be rescaled according to ratio.
+      w = sz.width;
+      h = sz.height / ratio;
+    } else {
+      // Horizontal or square image. Width needs to be rescaled according to ratio (for square ratio is 1.0).
+      w = sz.width * ratio;
+      h = sz.height;
+    }
+
+    final canvas = Rect.fromLTWH(0, 0, w, h);
+    final imageBoundaries = Rect.fromCenter(
+      center: widget.controller._offset + canvas.center,
+      width: w * s * cos(vm.radians(widget.controller._rotation)).abs() +
+          h * s * sin(vm.radians(widget.controller._rotation)).abs(),
+      height: w * s * sin(vm.radians(widget.controller._rotation)).abs() +
+          h * s * cos(vm.radians(widget.controller._rotation)).abs(),
     );
 
-    final bakedObb = obb.bake();
+    var clampBoundaries = Rect.fromCenter(
+      center: Offset.zero,
+      width: ((imageBoundaries.width - sz.width).abs().floorToDouble()),
+      height: (imageBoundaries.height - sz.height).abs().floorToDouble(),
+    );
+
+    final clampedOffset = Offset(
+      widget.controller._offset.dx.clamp(clampBoundaries.left, clampBoundaries.right),
+      widget.controller._offset.dy.clamp(clampBoundaries.top, clampBoundaries.bottom),
+    );
 
     _startOffset = widget.controller._offset;
-    _endOffset = widget.controller._offset;
-
-    final ctl = canvas.topLeft;
-    final ctr = canvas.topRight;
-    final cbr = canvas.bottomRight;
-    final cbl = canvas.bottomLeft;
-
-    final ll = Line(bakedObb.topLeft, bakedObb.bottomLeft);
-    final tt = Line(bakedObb.topRight, bakedObb.topLeft);
-    final rr = Line(bakedObb.bottomRight, bakedObb.topRight);
-    final bb = Line(bakedObb.bottomLeft, bakedObb.bottomRight);
-
-    final tl = ll.project(ctl);
-    final tr = tt.project(ctr);
-    final br = rr.project(cbr);
-    final bl = bb.project(cbl);
-
-    final dtl = ll.distanceToPoint(ctl);
-    final dtr = tt.distanceToPoint(ctr);
-    final dbr = rr.distanceToPoint(cbr);
-    final dbl = bb.distanceToPoint(cbl);
-
-    if (dtl > 0) {
-      final d = _toOffset(ctl - tl);
-      _endOffset += d;
-    }
-
-    if (dtr > 0) {
-      final d = _toOffset(ctr - tr);
-      _endOffset += d;
-    }
-
-    if (dbr > 0) {
-      final d = _toOffset(cbr - br);
-      _endOffset += d;
-    }
-    if (dbl > 0) {
-      final d = _toOffset(cbl - bl);
-      _endOffset += d;
-    }
-
-    widget.controller._offset = _endOffset;
+    widget.controller._offset = _endOffset = clampedOffset;
 
     if (animate) {
       if (_controller.isCompleted || _controller.isAnimating) {
@@ -247,8 +225,7 @@ class _CropState extends State<Crop> with TickerProviderStateMixin {
       // Remove the offset and constraint the degree scope to 0° <= degree <=
       // 360°. Constraint the scope is unnecessary, however, by doing this,
       // it would make our life easier when debugging.
-      final rotationAfterCalculation =
-          (widget.controller.rotation - gestureRotationOffset) % 360;
+      final rotationAfterCalculation = (widget.controller.rotation - gestureRotationOffset) % 360;
 
       /* details.rotation is in radians, convert this to degrees and set
         our rotation */
@@ -284,7 +261,7 @@ class _CropState extends State<Crop> with TickerProviderStateMixin {
             ..scale(s, s, 1),
           child: FittedBox(
             fit: BoxFit.cover,
-            child: widget.child,
+            child: Container(key: _childKey, child: widget.child),
           ),
         ),
       );
